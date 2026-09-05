@@ -7,6 +7,10 @@
 #include <stdbool.h>
 #include <math.h>
 
+/* O parser NMEA nao e copiado: nmea_parse.c do firmware e compilado junto,
+ * entao o teste exercita exatamente o codigo que roda na placa. */
+#include "nmea_parse.h"
+
 static int failures = 0;
 #define CHECK(cond, fmt, ...) do { \
     if (!(cond)) { printf("  FAIL: " fmt "\n", ##__VA_ARGS__); failures++; } \
@@ -58,49 +62,6 @@ static uint32_t compensate_P(const cal_t *h, int32_t adc_P, int32_t t_fine)
     return (uint32_t)p;
 }
 
-/* ---------- from components/nmea_gps/nmea_gps.c ---------- */
-static bool nmea_verify_checksum(const char *sentence, size_t len)
-{
-    if (len < 4 || sentence[0] != '$') return false;
-    const char *star = memchr(sentence, '*', len);
-    if (star == NULL || (size_t)(star - sentence) + 3 > len) return false;
-    uint8_t computed = 0;
-    for (const char *p = sentence + 1; p < star; p++) computed ^= (uint8_t)*p;
-    char hex[3] = {star[1], star[2], '\0'};
-    char *end = NULL;
-    unsigned long received = strtoul(hex, &end, 16);
-    if (end != hex + 2) return false;
-    return computed == (uint8_t)received;
-}
-
-static bool nmea_parse_coord(const char *value, const char *hemi, double *out)
-{
-    if (value == NULL || *value == '\0' || hemi == NULL || *hemi == '\0') return false;
-    char *end = NULL;
-    double raw = strtod(value, &end);
-    if (end == value) return false;
-    double degrees = (double)((int)(raw / 100.0));
-    double minutes = raw - degrees * 100.0;
-    if (minutes < 0.0 || minutes >= 60.0) return false;
-    double result = degrees + minutes / 60.0;
-    if (*hemi == 'S' || *hemi == 'W') result = -result;
-    else if (*hemi != 'N' && *hemi != 'E') return false;
-    *out = result;
-    return true;
-}
-
-static int nmea_split(char *payload, char *fields[], int max_fields)
-{
-    int count = 0;
-    char *p = payload;
-    fields[count++] = p;
-    while (*p && count < max_fields) {
-        if (*p == ',') { *p = '\0'; fields[count++] = p + 1; }
-        p++;
-    }
-    return count;
-}
-
 int main(void)
 {
     printf("== Modbus CRC-16 ==\n");
@@ -150,44 +111,78 @@ int main(void)
     /* And the exact conversion the driver reports: */
     printf("  info: driver would publish %.2f hPa\n", (P / 256.0f) / 100.0f);
 
-    printf("\n== NMEA checksum ==\n");
-    const char *good_gga = "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47";
-    const char *good_rmc = "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A";
-    const char *bad      = "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*48";
-    CHECK(nmea_verify_checksum(good_gga, strlen(good_gga)), "valid GGA accepted");
-    CHECK(nmea_verify_checksum(good_rmc, strlen(good_rmc)), "valid RMC accepted");
-    CHECK(!nmea_verify_checksum(bad, strlen(bad)), "corrupted checksum rejected");
-    CHECK(!nmea_verify_checksum("$GPGGA,1", 8), "sentence with no '*' rejected");
-    CHECK(!nmea_verify_checksum("GPGGA,1*47", 10), "sentence with no '$' rejected");
-    CHECK(!nmea_verify_checksum("$GPGGA,1*4", 10), "truncated checksum rejected");
-    CHECK(!nmea_verify_checksum("$GPGGA,1*ZZ", 11), "non-hex checksum rejected");
+    printf("\n== NMEA checksum (codigo real, nao copia) ==\n");
+    const char *gga = "$GPGGA,143012,1855.2340,S,04816.8900,W,1,09,0.8,862.4,M,-6.2,M,,*5E";
+    const char *rmc = "$GPRMC,143012,A,1855.2340,S,04816.8900,W,003.7,221.5,050926,020.3,W*61";
+    CHECK(nmea_verify_checksum(gga, strlen(gga)), "GGA valida aceita");
+    CHECK(nmea_verify_checksum(rmc, strlen(rmc)), "RMC valida aceita");
+    CHECK(!nmea_verify_checksum("$GPGGA,143012,1855.2340,S,04816.8900,W,1,09,0.8,862.4,M,-6.2,M,,*5F", 68),
+          "checksum corrompido rejeitado");
+    CHECK(!nmea_verify_checksum("$GPGGA,1", 8), "sentenca sem '*' rejeitada");
+    CHECK(!nmea_verify_checksum("GPGGA,1*47", 10), "sentenca sem '$' rejeitada");
+    CHECK(!nmea_verify_checksum("$GPGGA,1*4", 10), "checksum truncado rejeitado");
+    CHECK(!nmea_verify_checksum("$GPGGA,1*ZZ", 11), "checksum nao-hexadecimal rejeitado");
 
-    printf("\n== NMEA coordinate parsing ==\n");
-    double v;
-    CHECK(nmea_parse_coord("4807.038", "N", &v) && fabs(v - 48.1173) < 1e-4,
-          "4807.038 N -> %.6f (want 48.117300)", v);
-    CHECK(nmea_parse_coord("01131.000", "E", &v) && fabs(v - 11.516667) < 1e-5,
-          "01131.000 E -> %.6f (want 11.516667)", v);
-    CHECK(nmea_parse_coord("4916.45", "S", &v) && fabs(v + 49.274167) < 1e-5,
-          "4916.45 S -> %.6f (want -49.274167)", v);
-    CHECK(nmea_parse_coord("12311.12", "W", &v) && fabs(v + 123.185333) < 1e-5,
-          "12311.12 W -> %.6f (want -123.185333)", v);
-    /* Brazilian coordinates - the actual deployment region */
-    CHECK(nmea_parse_coord("2233.7620", "S", &v) && fabs(v + 22.562700) < 1e-5,
-          "2233.7620 S -> %.6f (want -22.562700)", v);
-    CHECK(!nmea_parse_coord("", "N", &v), "empty coordinate rejected");
-    CHECK(!nmea_parse_coord("4807.038", "", &v), "empty hemisphere rejected");
-    CHECK(!nmea_parse_coord("4807.038", "X", &v), "bogus hemisphere rejected");
-    CHECK(!nmea_parse_coord("4870.000", "N", &v), "minutes >= 60 rejected");
+    printf("\n== GGA completa -> fix (sem precisar de satelite) ==\n");
+    nmea_gps_fix_t fix;
+    char buf[128];
 
-    printf("\n== NMEA field splitting (empty fields must survive) ==\n");
-    char payload[] = "GPGGA,123519,,,,,0,00,,,M,,M,,";
-    char *fields[24];
-    int n = nmea_split(payload, fields, 24);
-    CHECK(n == 15, "field count = %d (want 15)", n);
-    CHECK(strcmp(fields[0], "GPGGA") == 0, "field 0 = \"%s\"", fields[0]);
-    CHECK(fields[2][0] == '\0', "empty latitude field is empty, not skipped");
-    CHECK(strcmp(fields[6], "0") == 0, "fix quality field = \"%s\" (want \"0\")", fields[6]);
+    memset(&fix, 0, sizeof(fix));
+    strcpy(buf, gga);
+    CHECK(nmea_parse_sentence(buf, &fix, 12345), "GGA reconhecida");
+    CHECK(fix.valid, "fix marcado valido");
+    CHECK(fabs(fix.latitude_deg + 18.920567) < 1e-5,
+          "latitude = %.6f (esperado -18.920567, hemisferio sul)", fix.latitude_deg);
+    CHECK(fabs(fix.longitude_deg + 48.281500) < 1e-5,
+          "longitude = %.6f (esperado -48.281500, oeste)", fix.longitude_deg);
+    CHECK(fabs(fix.altitude_m - 862.4) < 1e-6, "altitude = %.1f m", fix.altitude_m);
+    CHECK(fix.satellites == 9, "satelites = %u", (unsigned)fix.satellites);
+    CHECK(fabs(fix.hdop - 0.8f) < 1e-5, "hdop = %.1f", (double)fix.hdop);
+    CHECK(fix.fix_quality == 1, "fix_quality = %u", (unsigned)fix.fix_quality);
+    CHECK(fix.hour == 14 && fix.minute == 30 && fix.second == 12,
+          "hora UTC = %02u:%02u:%02u", fix.hour, fix.minute, fix.second);
+    CHECK(fix.timestamp_ms == 12345, "timestamp propagado = %lld", (long long)fix.timestamp_ms);
+
+    printf("\n== RMC completa -> fix ==\n");
+    memset(&fix, 0, sizeof(fix));
+    strcpy(buf, rmc);
+    CHECK(nmea_parse_sentence(buf, &fix, 999), "RMC reconhecida");
+    CHECK(fix.valid, "fix marcado valido");
+    CHECK(fabs(fix.latitude_deg + 18.920567) < 1e-5, "latitude = %.6f", fix.latitude_deg);
+    CHECK(fabs(fix.speed_kmh - 3.7 * 1.852) < 1e-6,
+          "velocidade = %.4f km/h (3.7 nos)", fix.speed_kmh);
+    CHECK(fabs(fix.course_deg - 221.5) < 1e-6, "rumo = %.1f graus", fix.course_deg);
+    CHECK(fix.day == 5 && fix.month == 9 && fix.year == 2026,
+          "data = %04u-%02u-%02u", fix.year, fix.month, fix.day);
+
+    printf("\n== sem fix: nao pode reportar posicao ==\n");
+    memset(&fix, 0, sizeof(fix));
+    strcpy(buf, "$GPGGA,143012,,,,,0,00,,,M,,M,,*63");
+    nmea_parse_sentence(buf, &fix, 1);
+    CHECK(!fix.valid, "GGA com fix_quality=0 nao vira fix valido");
+    CHECK(fix.latitude_deg == 0.0, "latitude intacta em %.1f", fix.latitude_deg);
+
+    memset(&fix, 0, sizeof(fix));
+    strcpy(buf, "$GPRMC,143012,V,,,,,,,050926,,*3C");
+    nmea_parse_sentence(buf, &fix, 1);
+    CHECK(!fix.valid, "RMC com status 'V' (void) nao vira fix valido");
+
+    printf("\n== fix valido nao pode ser apagado por sentenca sem fix ==\n");
+    memset(&fix, 0, sizeof(fix));
+    strcpy(buf, gga);
+    nmea_parse_sentence(buf, &fix, 100);
+    double lat_bom = fix.latitude_deg;
+    strcpy(buf, "$GPGSV,3,1,11,01,05,040,20,03,25,120,35,06,70,200,42,11,45,300,38*74");
+    CHECK(!nmea_parse_sentence(buf, &fix, 200), "GSV ignorada (tipo nao tratado)");
+    CHECK(fix.valid && fix.latitude_deg == lat_bom,
+          "fix anterior preservado apos sentenca ignorada");
+
+    printf("\n== talker GNSS multi-constelacao (GN em vez de GP) ==\n");
+    memset(&fix, 0, sizeof(fix));
+    strcpy(buf, "$GNGGA,143013,1855.2340,S,04816.8900,W,2,11,0.6,862.9,M,-6.2,M,,*48");
+    CHECK(nmea_parse_sentence(buf, &fix, 1), "GNGGA reconhecida");
+    CHECK(fix.valid && fix.fix_quality == 2, "fix DGPS (quality=2) aceito");
+    CHECK(fix.satellites == 11, "satelites = %u", (unsigned)fix.satellites);
 
     printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED",
            failures, failures == 1 ? "" : "s");

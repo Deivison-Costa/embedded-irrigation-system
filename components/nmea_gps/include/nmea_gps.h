@@ -17,31 +17,14 @@
 #include <stdint.h>
 
 #include "driver/uart.h"
+#include "nmea_parse.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-typedef struct {
-    bool     valid;          /* true when the receiver reports a usable fix */
-    double   latitude_deg;   /* positive north */
-    double   longitude_deg;  /* positive east  */
-    double   altitude_m;     /* metres above mean sea level */
-    double   speed_kmh;
-    double   course_deg;
-    uint8_t  satellites;
-    float    hdop;
-    uint8_t  fix_quality;    /* GGA field 6: 0 none, 1 GPS, 2 DGPS, ... */
-    /* UTC from the last RMC sentence; year 0 means "not yet received". */
-    uint16_t year;
-    uint8_t  month, day, hour, minute, second;
-    /* Milliseconds since boot when the fix was last refreshed. */
-    int64_t  timestamp_ms;
-    /* Diagnostics. */
-    uint32_t sentences_ok;
-    uint32_t checksum_errors;
-} nmea_gps_fix_t;
+/* nmea_gps_fix_t vem de nmea_parse.h (puro, testavel no host). */
 
 typedef struct {
     uart_port_t uart_port;

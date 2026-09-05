@@ -298,6 +298,13 @@ por um assinante externo em `sensors/#`:
 | DHT22 | 27,8 °C / 53,5 %RH |
 | LM393 | leitura estável |
 | GPS | UART recebendo, `crc_err=0` em todas as sentenças; sem fix (teste em ambiente interno) |
-| Anemômetro | `ESP_ERR_TIMEOUT` — sem resposta do slave 1 (pendente de conferir a fiação) |
+| Anemômetro | 2,6 m/s — funcionando após alimentar o sensor com 12 V |
 
-Pendente: fix de GPS a céu aberto e o anemômetro RS-485 respondendo.
+O anemômetro não respondia por dois motivos somados: o sensor RS-485 precisa de
+12 V (estava em 5 V) e o módulo transceptor é de **direção automática**, sem
+DE/RE. Uma varredura de 40 combinações (TX/RX nas duas ordens × 4 baud rates ×
+endereços 1-5) não recebeu um único byte, nem mesmo o eco do próprio pedido —
+o que descartou software e apontou para a alimentação.
+
+Pendente: apenas o fix de GPS a céu aberto. Todo o processamento posterior à
+antena está coberto pelos testes de host.
