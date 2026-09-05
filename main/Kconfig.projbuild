@@ -1,0 +1,134 @@
+menu "Irrigation System Configuration"
+
+    menu "Wi-Fi"
+        config IRRIG_WIFI_SSID
+            string "Wi-Fi SSID"
+            default "my-ssid"
+
+        config IRRIG_WIFI_PASSWORD
+            string "Wi-Fi password"
+            default ""
+            help
+                Leave empty for an open network.
+
+        config IRRIG_WIFI_MAX_RETRY
+            int "Reconnect attempts before a full radio restart"
+            default 8
+            range 1 100
+    endmenu
+
+    menu "MQTT"
+        config IRRIG_MQTT_URI
+            string "Broker URI"
+            default "mqtts://eef86b6f.ala.us-east-1.emqxsl.com:8883"
+            help
+                Use mqtts:// for TLS (port 8883) or mqtt:// for plaintext
+                (port 1883). The scheme decides whether the CA certificate in
+                main/certs/mqtt_ca.pem is required.
+
+        config IRRIG_MQTT_USERNAME
+            string "Username"
+            default ""
+
+        config IRRIG_MQTT_PASSWORD
+            string "Password"
+            default ""
+
+        config IRRIG_MQTT_CLIENT_ID
+            string "Client ID prefix"
+            default "esp32-irrigation"
+            help
+                The device MAC address is appended, so two boards on the same
+                broker never disconnect each other with a duplicate client ID.
+
+        config IRRIG_MQTT_TOPIC_PREFIX
+            string "Topic prefix"
+            default "sensors"
+
+        config IRRIG_MQTT_QOS
+            int "Publish QoS"
+            default 1
+            range 0 2
+
+        config IRRIG_MQTT_SKIP_CERT_VERIFY
+            bool "Skip TLS server certificate verification (INSECURE)"
+            default n
+            help
+                Debug only. Disables authentication of the broker and makes the
+                connection trivially interceptable.
+    endmenu
+
+    menu "Sensor pins"
+        config IRRIG_RS485_UART_TX
+            int "RS-485 UART TX -> MAX485 DI"
+            default 17
+
+        config IRRIG_RS485_UART_RX
+            int "RS-485 UART RX <- MAX485 RO"
+            default 16
+
+        config IRRIG_RS485_UART_RTS
+            int "RS-485 direction control -> MAX485 DE and RE_NEG"
+            default 5
+            help
+                Must differ from the TX and RX pins. Tie MAX485 DE and RE_NEG
+                together to this single pin.
+
+        config IRRIG_RS485_BAUD
+            int "RS-485 baud rate"
+            default 4800
+
+        config IRRIG_ANEMOMETER_SLAVE_ADDR
+            int "Anemometer Modbus slave address"
+            default 1
+            range 1 247
+
+        config IRRIG_GPS_UART_RX
+            int "GPS UART RX <- module TX"
+            default 18
+
+        config IRRIG_GPS_BAUD
+            int "GPS baud rate"
+            default 9600
+
+        config IRRIG_DHT_PIN
+            int "DHT22 data pin"
+            default 4
+
+        config IRRIG_I2C_SDA
+            int "I2C SDA (BH1750 + BMP280)"
+            default 21
+
+        config IRRIG_I2C_SCL
+            int "I2C SCL (BH1750 + BMP280)"
+            default 22
+
+        config IRRIG_LM393_PIN
+            int "LM393 rain/soil comparator digital output"
+            default 13
+            help
+                Must be an input-capable GPIO. On the classic ESP32, GPIO 34-39
+                are input-only and have no internal pull-ups.
+
+        config IRRIG_LM393_ACTIVE_LOW
+            bool "LM393 output is active low"
+            default y
+            help
+                Most LM393 comparator boards pull DO low when the measured
+                value crosses the threshold (rain detected / soil wet).
+    endmenu
+
+    menu "Sampling"
+        config IRRIG_SAMPLE_INTERVAL_MS
+            int "Sensor sampling interval (ms)"
+            default 2000
+            range 2000 3600000
+            help
+                Not below 2000: the DHT22 datasheet forbids sampling faster.
+
+        config IRRIG_GPS_MAX_FIX_AGE_MS
+            int "Treat a GPS fix older than this as invalid (ms)"
+            default 10000
+    endmenu
+
+endmenu

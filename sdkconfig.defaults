@@ -1,0 +1,57 @@
+# ---------------------------------------------------------------------------
+# embedded-irrigation-system - project defaults
+# Generated for ESP-IDF v5.5.x / target esp32
+# ---------------------------------------------------------------------------
+
+# --- Partition table -------------------------------------------------------
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- Flash / CPU -----------------------------------------------------------
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# --- Console ---------------------------------------------------------------
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+
+# --- FreeRTOS --------------------------------------------------------------
+# 1 kHz tick keeps the DHT bit-bang timing windows and the Modbus 3.5-char
+# inter-frame delays expressible in whole ticks.
+CONFIG_FREERTOS_HZ=1000
+
+# --- Task watchdog ---------------------------------------------------------
+# Every long-running task in this firmware subscribes explicitly.
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
+
+# --- Wi-Fi -----------------------------------------------------------------
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=10
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=32
+
+# --- LWIP ------------------------------------------------------------------
+CONFIG_LWIP_SO_RCVBUF=y
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=5760
+CONFIG_LWIP_TCP_WND_DEFAULT=5760
+# SNTP is required: TLS certificate validity cannot be checked without a clock.
+CONFIG_LWIP_SNTP_MAX_SERVERS=2
+
+# --- mbedTLS ---------------------------------------------------------------
+# 4 kB is not enough for many public broker chains; 8 kB avoids
+# MBEDTLS_ERR_SSL_INVALID_RECORD / -0x7200 handshake failures.
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=8192
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
+CONFIG_MBEDTLS_HARDWARE_MPI=y
+CONFIG_MBEDTLS_HARDWARE_SHA=y
+
+# --- MQTT ------------------------------------------------------------------
+CONFIG_MQTT_TASK_STACK_SIZE=8192
+CONFIG_MQTT_TRANSPORT_SSL=y
+
+# --- Logging ---------------------------------------------------------------
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
