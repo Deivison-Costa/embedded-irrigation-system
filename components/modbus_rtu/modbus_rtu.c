@@ -19,6 +19,7 @@ struct modbus_rtu_s {
     uint32_t    inter_frame_ms;
     uint8_t     last_exception;
     bool        driver_installed;
+    bool        auto_direction; /* modulo comuta sozinho; espera-se eco no RX */
 };
 
 /* Standard Modbus CRC-16 (polynomial 0xA001, initial value 0xFFFF). */
@@ -51,8 +52,12 @@ esp_err_t modbus_rtu_create(const modbus_rtu_config_t *cfg, modbus_rtu_handle_t 
         ESP_LOGE(TAG, "invalid baud rate %d", cfg->baud_rate);
         return ESP_ERR_INVALID_ARG;
     }
-    if (cfg->rts_pin == cfg->tx_pin || cfg->rts_pin == cfg->rx_pin ||
-        cfg->tx_pin == cfg->rx_pin) {
+    if (cfg->tx_pin == cfg->rx_pin) {
+        ESP_LOGE(TAG, "TX and RX cannot share GPIO %d", cfg->tx_pin);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (cfg->rts_pin >= 0 &&
+        (cfg->rts_pin == cfg->tx_pin || cfg->rts_pin == cfg->rx_pin)) {
         ESP_LOGE(TAG, "TX=%d, RX=%d and RTS(DE/RE)=%d must be three distinct pins",
                  cfg->tx_pin, cfg->rx_pin, cfg->rts_pin);
         return ESP_ERR_INVALID_ARG;
@@ -63,6 +68,7 @@ esp_err_t modbus_rtu_create(const modbus_rtu_config_t *cfg, modbus_rtu_handle_t 
         return ESP_ERR_NO_MEM;
     }
     h->port                = cfg->uart_port;
+    h->auto_direction      = (cfg->rts_pin < 0);
     h->response_timeout_ms = cfg->response_timeout_ms ? cfg->response_timeout_ms : 500;
 
     /* Modbus requires >= 3.5 character times of silence between frames.
@@ -96,22 +102,37 @@ esp_err_t modbus_rtu_create(const modbus_rtu_config_t *cfg, modbus_rtu_handle_t 
     h->driver_installed = true;
 
     if ((err = uart_param_config(h->port, &uart_cfg)) != ESP_OK) goto fail;
+    int rts = h->auto_direction ? UART_PIN_NO_CHANGE : cfg->rts_pin;
     if ((err = uart_set_pin(h->port, cfg->tx_pin, cfg->rx_pin,
-                            cfg->rts_pin, UART_PIN_NO_CHANGE)) != ESP_OK) goto fail;
+                            rts, UART_PIN_NO_CHANGE)) != ESP_OK) goto fail;
 
-    /* Hardware-timed DE/RE. The peripheral raises RTS before the first start
-     * bit and drops it after the last stop bit has been shifted out. */
-    if ((err = uart_set_mode(h->port, UART_MODE_RS485_HALF_DUPLEX)) != ESP_OK) goto fail;
+    if (h->auto_direction) {
+        /* O modulo comuta sozinho. O modo RS-485 do periferico nao serve aqui:
+         * ele liga rx_busy_tx_en (evitar colisao), que impede a transmissao
+         * enquanto a linha RX estiver ocupada - e num modulo que ecoa, isso
+         * trava o proximo pedido. */
+        if ((err = uart_set_mode(h->port, UART_MODE_UART)) != ESP_OK) goto fail;
+    } else {
+        /* DE/RE cronometrado por hardware: o periferico levanta RTS antes do
+         * primeiro start bit e o baixa depois do ultimo stop bit sair. */
+        if ((err = uart_set_mode(h->port, UART_MODE_RS485_HALF_DUPLEX)) != ESP_OK) goto fail;
+    }
 
     /* The RS-485 driver echoes its own transmission on RX; the peripheral's
      * collision detection tolerates this, but the read timeout must still be
      * short enough to detect a silent bus. */
     if ((err = uart_set_rx_timeout(h->port, 3)) != ESP_OK) goto fail;
 
-    ESP_LOGI(TAG, "UART%d RS-485 half-duplex: TX=%d RX=%d RTS(DE/RE)=%d @ %d baud, "
-                  "inter-frame gap %" PRIu32 " ms",
-             (int)h->port, cfg->tx_pin, cfg->rx_pin, cfg->rts_pin, cfg->baud_rate,
-             h->inter_frame_ms);
+    if (h->auto_direction) {
+        ESP_LOGI(TAG, "UART%d modo RS-485 automatico (sem DE/RE): TX=%d RX=%d @ %d baud, "
+                      "silencio entre frames %" PRIu32 " ms",
+                 (int)h->port, cfg->tx_pin, cfg->rx_pin, cfg->baud_rate, h->inter_frame_ms);
+    } else {
+        ESP_LOGI(TAG, "UART%d RS-485 half-duplex: TX=%d RX=%d RTS(DE/RE)=%d @ %d baud, "
+                      "silencio entre frames %" PRIu32 " ms",
+                 (int)h->port, cfg->tx_pin, cfg->rx_pin, cfg->rts_pin, cfg->baud_rate,
+                 h->inter_frame_ms);
+    }
 
     *out = h;
     return ESP_OK;
@@ -196,6 +217,21 @@ esp_err_t modbus_rtu_read_holding_registers(modbus_rtu_handle_t h, uint8_t slave
     uint8_t resp[MODBUS_MAX_ADU_LEN];
     size_t received = 0;
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(h->response_timeout_ms);
+
+    /* Modulos de direcao automatica mantem o receptor ligado enquanto
+     * transmitem, entao o proprio pedido volta no RX. Consumir esse eco antes
+     * de ler a resposta - senao ele e interpretado como um frame malformado. */
+    if (h->auto_direction) {
+        uint8_t echo[sizeof(req)];
+        int n = uart_read_bytes(h->port, echo, sizeof(req), pdMS_TO_TICKS(100));
+        if (n == (int)sizeof(req) && memcmp(echo, req, sizeof(req)) == 0) {
+            ESP_LOGV(TAG, "eco do proprio pedido descartado");
+        } else if (n > 0) {
+            /* Nao era eco: o modulo nao ecoa e isto ja e o inicio da resposta. */
+            memcpy(resp, echo, (size_t)n);
+            received = (size_t)n;
+        }
+    }
 
     while (received < expected_len) {
         TickType_t now = xTaskGetTickCount();

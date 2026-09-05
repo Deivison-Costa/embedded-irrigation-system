@@ -61,18 +61,25 @@ menu "Irrigation System Configuration"
     menu "Sensor pins"
         config IRRIG_RS485_UART_TX
             int "RS-485 UART TX -> MAX485 DI"
-            default 17
+            default 16
+            help
+                O sketch Arduino original usava Serial2.begin(baud, cfg, rx=17,
+                tx=16), ou seja TX=16 e RX=17. Manter essa ordem para casar com
+                a fiacao existente.
 
         config IRRIG_RS485_UART_RX
             int "RS-485 UART RX <- MAX485 RO"
-            default 16
+            default 17
 
         config IRRIG_RS485_UART_RTS
-            int "RS-485 direction control -> MAX485 DE and RE_NEG"
-            default 5
+            int "RS-485 direction control -> MAX485 DE and RE_NEG (-1 = automatico)"
+            default -1
+            range -1 48
             help
-                Must differ from the TX and RX pins. Tie MAX485 DE and RE_NEG
-                together to this single pin.
+                Use -1 para modulos de direcao automatica, que so expoem
+                VCC/GND/A/B/RXD/TXD e comutam o transceptor sozinhos.
+                Se o modulo tiver DE e RE, ligue os dois juntos num GPIO e
+                informe o numero aqui; ele precisa diferir de TX e RX.
 
         config IRRIG_RS485_BAUD
             int "RS-485 baud rate"

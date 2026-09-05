@@ -23,11 +23,18 @@
 extern "C" {
 #endif
 
+/* rts_pin: modulo de direcao automatica, sem controle de DE/RE por software. */
+#define MODBUS_RTU_NO_RTS (-1)
+
 typedef struct {
     uart_port_t uart_port;
     int         tx_pin;      /* MAX485 DI  */
     int         rx_pin;      /* MAX485 RO  */
-    int         rts_pin;     /* MAX485 DE + RE_NEG tied together */
+    /* MAX485 DE + RE_NEG ligados juntos. Use MODBUS_RTU_NO_RTS quando o modulo
+     * for de direcao automatica (so VCC/GND/A/B/RXD/TXD): nesse caso o
+     * transceptor comuta sozinho e o driver usa UART comum em vez do modo
+     * RS-485 half-duplex, cuja deteccao de colisao atrapalha esses modulos. */
+    int         rts_pin;
     int         baud_rate;
     uart_parity_t parity;
     uart_stop_bits_t stop_bits;
@@ -37,6 +44,7 @@ typedef struct {
 #define MODBUS_RTU_CONFIG_DEFAULT()          \
     (modbus_rtu_config_t){                   \
         .uart_port           = UART_NUM_2,   \
+        .rts_pin             = MODBUS_RTU_NO_RTS, \
         .baud_rate           = 4800,         \
         .parity              = UART_PARITY_DISABLE, \
         .stop_bits           = UART_STOP_BITS_1,    \

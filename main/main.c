@@ -40,8 +40,11 @@ static const char *TAG = "irrigation";
  * than published, so downstream consumers never see impossible values. */
 #define WIND_SPEED_MIN_MS   0.0f
 #define WIND_SPEED_MAX_MS   100.0f
-#define PRESSURE_MIN_HPA    300.0f
-#define PRESSURE_MAX_HPA    1100.0f
+/* Publicado em kPa: a entidade Sensor do backend, a formula de Penman-Monteith
+ * (FAO-56, gamma = 0.665e-3 * P[kPa]) e os limiares do frontend usam kPa.
+ * O sketch original publicava hPa, o que inflava gamma em 10x. */
+#define PRESSURE_MIN_KPA    30.0f
+#define PRESSURE_MAX_KPA    110.0f
 #define LUX_MAX             65535.0f
 
 /* The sensor task runs on APP_CPU so the DHT22 critical section never stalls
@@ -254,12 +257,14 @@ static void sample_pressure(void)
         return;
     }
 
-    ESP_LOGI(TAG, "BMP280: %.2f hPa, %.2f C", pressure, temperature);
+    const float pressure_kpa = pressure / 10.0f; /* o driver devolve hPa */
+    ESP_LOGI(TAG, "BMP280: %.2f kPa (%.2f hPa), %.2f C",
+             pressure_kpa, pressure, temperature);
 
-    if (pressure < PRESSURE_MIN_HPA || pressure > PRESSURE_MAX_HPA) {
-        app_mqtt_publish_error("pressure", "out of range: %.2f", pressure);
+    if (pressure_kpa < PRESSURE_MIN_KPA || pressure_kpa > PRESSURE_MAX_KPA) {
+        app_mqtt_publish_error("pressure", "out of range: %.2f kPa", pressure_kpa);
     } else {
-        app_mqtt_publish_float("pressure", pressure, 2);
+        app_mqtt_publish_float("pressure", pressure_kpa, 3);
     }
 
     /* The sketch read this value and then discarded it; publishing it gives a
