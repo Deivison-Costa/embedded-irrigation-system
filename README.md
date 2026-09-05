@@ -174,9 +174,15 @@ Prefixo configurável, `sensors` por padrão.
    reconexão é assíncrona, com backoff progressivo (0,5 s → 30 s), e a amostragem
    continua rodando enquanto o link está fora.
 
-5. **TLS sem relógio.** `espClient.setCACert()` com um certificado válido ainda
-   falha se a data do sistema não estiver definida, porque não dá para validar
-   *notBefore*/*notAfter*. Foi adicionado SNTP antes da primeira conexão MQTT.
+5. **TLS sem relógio.** Sem data de sistema definida não dá para validar
+   *notBefore*/*notAfter* do certificado. Foi adicionado SNTP antes da primeira
+   conexão MQTT, e ligadas duas opções que o IDF deixa desativadas por padrão:
+   `CONFIG_LWIP_DHCP_GET_NTP_SRV` (sem ela `esp_netif_sntp_init()` devolve
+   `ESP_ERR_INVALID_ARG` quando se pede servidor via DHCP, e o relógio nunca é
+   acertado) e `CONFIG_MBEDTLS_HAVE_TIME_DATE` — sem esta última o mbedTLS
+   **ignora a validade do certificado**: a cadeia é conferida por assinatura,
+   mas um certificado expirado passaria despercebido. Verificado em hardware:
+   `clock synchronised: 2026-09-05 21:41:32 UTC`.
 
 6. **Certificado da CA vazio.** A constante `ca_cert` tinha só as linhas
    BEGIN/END. O firmware agora recusa iniciar uma conexão `mqtts://` sem
@@ -275,5 +281,23 @@ handshake falharia com `MBEDTLS_ERR_X509_INVALID_FORMAT`.
 Os algoritmos que não dependem de hardware têm teste de host (`test/`), aferidos
 contra valores de referência publicados — valor de verificação do CRC-16/MODBUS
 (`0x4B37`), exemplo resolvido do datasheet do BMP280 (25,08 °C / 100653,27 Pa) e
-sentenças NMEA de referência. **Não foi possível testar em hardware**: a validação
-com os sensores reais continua pendente.
+sentenças NMEA de referência.
+
+### Validado em hardware (ESP32, 2026-09-05)
+
+Gravado e executado numa placa real, com publicação confirmada no broker EMQX
+por um assinante externo em `sensors/#`:
+
+| Subsistema | Resultado |
+| --- | --- |
+| Wi-Fi | conecta; reconexão com backoff exercitada de verdade (desconexão reason 2/203 no primeiro `assoc`, recuperada sozinha) |
+| SNTP | `clock synchronised: 2026-09-05 21:41:32 UTC` |
+| MQTT/TLS | `connected to broker`, com validação de data do certificado ativa |
+| BH1750 | `initialised at 0x23`, ~45 lx |
+| BMP280 | `chip id 0x58`, 932,7 hPa / 29,6 °C |
+| DHT22 | 27,8 °C / 53,5 %RH |
+| LM393 | leitura estável |
+| GPS | UART recebendo, `crc_err=0` em todas as sentenças; sem fix (teste em ambiente interno) |
+| Anemômetro | `ESP_ERR_TIMEOUT` — sem resposta do slave 1 (pendente de conferir a fiação) |
+
+Pendente: fix de GPS a céu aberto e o anemômetro RS-485 respondendo.

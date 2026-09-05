@@ -52,6 +52,14 @@ CONFIG_MBEDTLS_HARDWARE_SHA=y
 CONFIG_MQTT_TASK_STACK_SIZE=8192
 CONFIG_MQTT_TRANSPORT_SSL=y
 
+# --- SNTP / validação de data do certificado --------------------------------
+# esp_netif_sntp com server_from_dhcp exige esta opcao; sem ela o
+# esp_netif_sntp_init() devolve ESP_ERR_INVALID_ARG e o relogio nunca e acertado.
+CONFIG_LWIP_DHCP_GET_NTP_SRV=y
+# Sem isto o mbedTLS ignora notBefore/notAfter: a cadeia e verificada por
+# assinatura, mas um certificado expirado passaria. Depende do relogio acima.
+CONFIG_MBEDTLS_HAVE_TIME_DATE=y
+
 # --- Logging ---------------------------------------------------------------
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
