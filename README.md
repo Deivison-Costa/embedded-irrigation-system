@@ -68,6 +68,7 @@ main/
   main.c                  inicialização e tarefa de amostragem
   app_wifi.c/.h           Wi-Fi station, backoff de reconexão, SNTP
   app_mqtt.c/.h           cliente MQTT/TLS, publicação, last will
+  app_power.c/.h          motivo do reset, guarda contra loop de reset por brownout
   Kconfig.projbuild       todas as opções de menuconfig
   certs/mqtt_ca.pem       certificado da CA do broker (preencher)
 components/
@@ -131,6 +132,8 @@ Prefixo configurável, `sensors` por padrão.
 | `sensors/rain` | 0/1 já normalizado por `LM393_ACTIVE_LOW` |
 | `sensors/latitude`, `longitude`, `altitude`, `satellites` | GPS |
 | `sensors/uptime`, `sensors/freeHeap` | diagnóstico, a cada 30 ciclos |
+| `sensors/resetReason` | por que a placa reiniciou (retained, uma vez por boot) |
+| `sensors/bootAttempts` | boots seguidos que não chegaram a 60 s no ar; `1` é o valor saudável |
 | `sensors/status` | `online` / `offline` (retained, via last will) |
 | `sensors/errors` | JSON: `{"sensor":...,"error":...,"uptime_ms":...}` |
 
@@ -264,6 +267,99 @@ Prefixo configurável, `sensors` por padrão.
 30. `esp_rom_get_cpu_ticks_per_us()` é lido uma vez e guardado. Se algum dia
     `CONFIG_PM_ENABLE` for ligado, é preciso um lock `ESP_PM_CPU_FREQ_MAX` em
     volta de `dht_read()` — está anotado no código.
+
+---
+
+## Loop de reset: diagnóstico e mitigação
+
+**Sintoma.** Depois de algum tempo funcionando normalmente, a placa passava a
+reiniciar sozinha e sem parar, sem nunca mais se recuperar.
+
+**Evidência.** 45 s de console capturados durante o loop:
+
+- 65 boots em 45 s — um reset a cada ~700 ms;
+- **64 de 64** com `rst:0x1 (POWERON_RESET)`;
+- **64 de 64** morrendo na mesma linha, sempre a última a sair:
+
+```
+I (827) phy_init: phy_version 4863,a3a4459,Oct 28 2025,14:30:06
+E<NUL>ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x17 (SPI_FAST_FLASH_BOOT)
+```
+
+**Causa.** `phy_init` é a calibração de RF e a ligação do amplificador de
+potência: o maior degrau de corrente de todo o boot, pico da ordem de 400 mA.
+O trilho de 3,3 V não sustentava esse degrau.
+
+Aquele `E` solto é o primeiro caractere de `E (nnn) brownout: Brownout detector
+was triggered`. A ISR do detector chegou a escrever uma letra e a tensão
+continuou caindo — passou também do limiar de power-on reset antes que a ISR
+conseguisse concluir o reset de software que ela mesma dispara. É por isso que
+o motivo registrado é `POWERON_RESET` (0x01) e não `SYS_BROWN_OUT` (0x0F): o
+domínio RTC é apagado junto, e com ele a dica `ESP_RST_BROWNOUT`. O evento
+chega ao boot seguinte disfarçado de "alguém acabou de ligar a placa".
+
+E o loop se auto-alimenta: todo reset volta direto para o `phy_init`, que é
+exatamente o passo que falha. Não é uma falha intermitente — é a mesma falha, no
+mesmo ponto, 1,4 vez por segundo, indefinidamente.
+
+**Nada disso é defeito de firmware; é entrega de energia.** Mas o firmware não
+tinha defesa nem diagnóstico para o caso, e era isso que fazia o problema
+parecer inexplicável.
+
+### O que mudou
+
+| Mudança | Por quê |
+| --- | --- |
+| `ESP_BROWNOUT_DET_LVL_SEL_7` (2,80 V), era o nível 0 (2,43 V) | dispara o detector **enquanto ainda há margem**, para que a ISR consiga gravar a dica e concluir um reset limpo em vez de ser atropelada pelo POR |
+| `ESP_PHY_REDUCE_TX_POWER=y` | com a dica preservada, o próprio ESP-IDF sobe o rádio na potência mínima no boot seguinte a um brownout. Esse caminho de recuperação já existia e o nível 0 impedia de ser alcançado |
+| `ESP_PHY_MAX_WIFI_TX_POWER=10` (era 20) | entra nos dados de inicialização do PHY, ou seja, reduz o pico do próprio `phy_init` |
+| `ESP_DEFAULT_CPU_FREQ_MHZ_80` (era 240) | corrente de base sobre a qual o pico de RF se soma |
+| `main/app_power.c` | conta boots em NVS (a memória RTC não sobrevive ao POR de um brownout real), reconhece o loop, imprime o diagnóstico e **espera** 5 s → 10 s → 20 s ... antes de ligar o rádio, em vez de insistir na cadência em que falha |
+
+O boot passa a dizer o que aconteceu, e o motivo vai para o broker em
+`sensors/resetReason` e `sensors/bootAttempts` — o que transforma "reiniciou
+sozinho" em algo com causa anexada no histórico, em vez de um buraco na série.
+
+### Medições
+
+Cada linha é uma gravação real na placa, com a NVS apagada antes para zerar o
+contador:
+
+| CPU | Teto de TX do PHY | Resultado |
+| --- | --- | --- |
+| 240 MHz | 20 dBm (configuração original) | 64/64 boots morrem no `phy_init` |
+| 240 MHz | 13 dBm | 5/5 morrem no `phy_init` |
+| 240 MHz | 10 dBm | 4/4 morrem no `phy_init` |
+| 160 MHz | 10 dBm | passa o `phy_init`, associa (RSSI −20), sincroniza SNTP, abre o TLS e inicializa os sensores — e morre ~2,4 s depois no loop `invalid header: 0xffffffff` do ROM, que é a própria flash ficando sem alimentação |
+| **80 MHz** | **10 dBm** | **estável: 185 s sem um único reset, MQTT/TLS conectado, heap constante em 169 KB** |
+
+A margem é fina o bastante para que a frequência da CPU decida o resultado
+sozinha: a 240 MHz a placa não sobe nem na potência de RF mínima que o PHY do
+ESP32 aceita.
+
+### A correção definitiva é de hardware
+
+80 MHz e 10 dBm compensam uma fonte fraca ao custo de desempenho e de alcance —
+não são o conserto. Na ordem em que valem ser verificados:
+
+1. **Cabo e porta USB.** Cabo fino, longo ou só de carga derruba volts sob
+   carga; porta com proteção de sobrecorrente corta o VBUS inteiro no pico de
+   RF, o que explica um colapso rápido demais até para a ISR do brownout.
+   Trocar por um cabo curto e grosso, ou alimentar por um hub com fonte
+   própria, é o teste mais barato.
+2. **Capacitor de bulk.** 470 µF ou mais entre 3V3 e GND, o mais perto possível
+   do módulo, absorve o degrau de RF que o regulador não acompanha.
+3. **Regulador de 3,3 V.** O AMS1117 das placas de desenvolvimento esquenta e
+   sua tensão de dropout sobe com a temperatura — o que explica a placa
+   funcionar por um tempo e só depois entrar em loop.
+4. **Periféricos no mesmo trilho.** GPS em aquisição e o módulo RS-485 tiram
+   corrente do mesmo 3,3 V. Alimentá-los à parte devolve margem ao rádio.
+
+Resolvida a alimentação, volte `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240` e
+`CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=20` em `sdkconfig.defaults`. As outras três
+mudanças valem manter para sempre: são detecção e recuperação, não concessão.
 
 ---
 

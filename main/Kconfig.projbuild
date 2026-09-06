@@ -138,4 +138,34 @@ menu "Irrigation System Configuration"
             default 10000
     endmenu
 
+    menu "Alimentacao e estabilidade de boot"
+        config IRRIG_BOOT_STABLE_S
+            int "Uptime que caracteriza um boot bem-sucedido (s)"
+            default 60
+            range 10 3600
+            help
+                Depois deste tempo no ar o contador de boots instaveis e
+                zerado. Precisa ser maior que o momento em que a placa costuma
+                morrer - o pico de corrente do phy_init acontece menos de 1 s
+                apos o reset, entao qualquer valor acima de alguns segundos ja
+                distingue um boot que vingou de um que nao vingou.
+
+        config IRRIG_BOOT_LOOP_THRESHOLD
+            int "Boots consecutivos sem sucesso que caracterizam um loop"
+            default 3
+            range 2 20
+            help
+                A partir daqui o firmware para de tentar na cadencia em que
+                falha e passa a esperar antes de ligar o radio.
+
+        config IRRIG_BOOT_LOOP_BACKOFF_MAX_S
+            int "Espera maxima entre tentativas em loop de reset (s)"
+            default 60
+            range 5 600
+            help
+                A espera dobra a cada tentativa (5 s, 10 s, 20 s ...) ate este
+                teto. Serve para o regulador de 3,3 V esfriar e o capacitor de
+                bulk recarregar antes do proximo pico de RF.
+    endmenu
+
 endmenu

@@ -10,7 +10,9 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # --- Flash / CPU -----------------------------------------------------------
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+# A frequência da CPU é definida na seção "Alimentação / RF", no fim do arquivo:
+# ela deixou de ser uma escolha de desempenho e passou a ser uma escolha de
+# corrente.
 
 # --- Console ---------------------------------------------------------------
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
@@ -63,3 +65,38 @@ CONFIG_MBEDTLS_HAVE_TIME_DATE=y
 # --- Logging ---------------------------------------------------------------
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+
+# --- Alimentação / RF -------------------------------------------------------
+# A placa ficava presa num loop de reset (~1,4 Hz) morrendo sempre no mesmo
+# ponto: logo apos "phy_init", a maior demanda de corrente de todo o boot
+# (calibracao de RF + ligacao do PA, pico da ordem de 400 mA). O trilho de
+# 3,3 V nao sustentava esse degrau, o detector de brownout comecava a imprimir
+# e a tensao continuava caindo ate abaixo do limiar de power-on reset - por
+# isso o motivo registrado era "rst:0x1 (POWERON_RESET)" e nao brownout.
+#
+# 1) Nivel 7 (2,80 V) faz o detector disparar ENQUANTO ainda ha margem, de modo
+#    que a ISR consegue gravar a dica ESP_RST_BROWNOUT e concluir um reset de
+#    software limpo. No nivel 0 (2,43 V, o padrao anterior) ele disparava tarde
+#    demais e o evento chegava mascarado de power-on.
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7=y
+# 2) Com a dica acima preservada, o proprio ESP-IDF sobe o radio na potencia
+#    minima no boot seguinte a um brownout - o caminho de recuperacao que o
+#    nivel 0 impedia de existir.
+CONFIG_ESP_PHY_REDUCE_TX_POWER=y
+# 3) E, antes de tudo isso, baixa o teto de potencia de TX. Vale para os dados
+#    de inicializacao do PHY, ou seja, ja reduz o pico do proprio phy_init.
+#    10 dBm e o minimo que o PHY do ESP32 aceita (o piso da tabela e 40, em
+#    unidades de 0,25 dBm). Custo: alcance de Wi-Fi menor.
+CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=10
+# 4) 80 MHz em vez de 240 MHz. Nao e o pico de RF, e a corrente de base sobre a
+#    qual esse pico se soma - e nesta placa foi o que decidiu. Medido: a 240 MHz
+#    a placa morre no phy_init mesmo a 10 dBm; a 80 MHz ela sobe e opera.
+#    Custo: handshake TLS mais lento. O bit-bang do DHT22 nao e afetado - o
+#    driver le esp_rom_get_cpu_ticks_per_us() na criacao e se ajusta sozinho
+#    (o que ele nao tolera e escalonamento dinamico, CONFIG_PM_ENABLE).
+#
+# Os itens 3 e 4 compensam uma fonte fraca; NAO sao a correcao definitiva.
+# Depois de resolver a alimentacao (ver README, secao "Loop de reset"), volte
+# para CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240 e 20 dBm - o item 1 e o 2 valem
+# manter para sempre, porque sao deteccao e recuperacao, nao concessao.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_80=y

@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "app_mqtt.h"
+#include "app_power.h"
 #include "app_wifi.h"
 #include "bh1750.h"
 #include "bmp280.h"
@@ -336,6 +337,8 @@ static void sensor_task(void *arg)
     TickType_t last_wake = xTaskGetTickCount();
     const TickType_t period = pdMS_TO_TICKS(CONFIG_IRRIG_SAMPLE_INTERVAL_MS);
     uint32_t cycle = 0;
+    bool boot_marked_stable = false;
+    bool boot_reported = false;
 
     while (1) {
         esp_task_wdt_reset();
@@ -358,11 +361,29 @@ static void sensor_task(void *arg)
         sample_lm393();
         sample_gps();
 
+        const int64_t uptime_s = esp_timer_get_time() / 1000000;
+
+        /* Surviving this long means the board got through the RF power-up, the
+         * step it was dying in. Only then is the boot worth calling good. */
+        if (!boot_marked_stable && uptime_s >= CONFIG_IRRIG_BOOT_STABLE_S) {
+            app_power_mark_stable();
+            boot_marked_stable = true;
+        }
+
+        /* Published once per boot, as soon as there is a broker: it is what
+         * turns "it rebooted on its own" into something with a cause attached
+         * in the history, instead of a gap in the series. */
+        if (!boot_reported && online) {
+            app_mqtt_publish("resetReason", app_power_reset_reason_str(), true);
+            app_mqtt_publish_int("bootAttempts", (long)app_power_unstable_boots());
+            boot_reported = true;
+        }
+
         if ((++cycle % 30) == 0) {
             ESP_LOGI(TAG, "heap: %" PRIu32 " B free, %" PRIu32 " B min, uptime %lld s",
                      esp_get_free_heap_size(), esp_get_minimum_free_heap_size(),
-                     esp_timer_get_time() / 1000000);
-            app_mqtt_publish_int("uptime", (long)(esp_timer_get_time() / 1000000));
+                     uptime_s);
+            app_mqtt_publish_int("uptime", (long)uptime_s);
             app_mqtt_publish_int("freeHeap", (long)esp_get_free_heap_size());
         }
 
@@ -384,6 +405,10 @@ static void sensor_task(void *arg)
 void app_main(void)
 {
     ESP_LOGI(TAG, "embedded-irrigation-system starting (IDF %s)", esp_get_idf_version());
+
+    /* Before the radio: enabling it is the current peak this board was
+     * collapsing on, and the guard needs to run while the rail is still calm. */
+    app_power_boot_guard();
 
     ESP_ERROR_CHECK(app_wifi_start());
 
