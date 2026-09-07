@@ -1,0 +1,6 @@
+# Name,   Type, SubType, Offset,   Size,     Flags
+# TLS + Wi-Fi + MQTT push the app well past the 1MB default factory partition,
+# so a custom table is required (single OTA-less factory app + NVS).
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+factory,  app,  factory, 0x10000,  0x2C0000,
